@@ -1,0 +1,61 @@
+# Build artifacts
+build/
+bin/
+obj/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+*.exp
+*.map
+
+# Installer and Packaging
+installer_output/
+*.iss
+*.app
+*.dmg
+*.pkg
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# IDE and Project Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.user
+*.suo
+*.vstyler
+*.opendb
+*.db
+*.vcproj
+*.vcxproj
+*.sln
+*.vcxproj.filters
+*.vcxproj.user
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Local dependencies
+deps/
+
+# Temporary and log files
+*.log
+*.tmp
+*.bak

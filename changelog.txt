@@ -1,0 +1,8 @@
+AstroSpike Changelog
+====================
+
+Version 1.0.0
+- Initial Standalone Release
+- Ported AstroSpikeDialog from TStar
+- Added dark theme and custom icons
+- Integrated installer builder

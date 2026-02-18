@@ -1,0 +1,231 @@
+#ifndef ASTROSPIKEDIALOG_H
+#define ASTROSPIKEDIALOG_H
+
+#include <QDialog>
+#include <QWidget>
+#include <QImage>
+#include <QThread>
+#include <QBasicTimer>
+#include <QVector>
+#include <QColor>
+#include <QPointF>
+#include <QMutex>
+#include <QPointer>
+#include "ImageBuffer.h"
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <memory>
+
+// Forward decls
+class QLabel;
+class QSlider;
+class QCheckBox;
+class QDoubleSpinBox;
+class QScrollArea;
+class QVBoxLayout;
+class QPushButton;
+
+// Data Structures
+namespace AstroSpike {
+
+    struct Star {
+        float x = 0;
+        float y = 0;
+        float brightness = 0;
+        float radius = 0;
+        QColor color;
+    };
+
+    enum class ToolMode {
+        None,
+        Add,
+        Erase
+    };
+
+    struct Config {
+        // Detection
+        float threshold = 80.0f; // 1-100 UI range
+        float starAmount = 100.0f; // %
+        float minStarSize = 0.0f;
+        float maxStarSize = 100.0f;
+
+        // Main Spikes
+        float quantity = 4.0f;
+        float length = 300.0f;
+        float globalScale = 1.0f;
+        float angle = 45.0f;
+        float intensity = 1.0f;
+        float spikeWidth = 1.0f;
+
+        // Appearance
+        float colorSaturation = 1.0f;
+        float hueShift = 0.0f;
+
+        // Secondary Spikes
+        float secondaryIntensity = 0.3f;
+        float secondaryLength = 120.0f;
+        float secondaryOffset = 45.0f;
+
+        // Soft Flare
+        float softFlareIntensity = 1.0f;
+        float softFlareSize = 15.0f;
+
+        // Halo
+        bool enableHalo = false;
+        float haloIntensity = 0.5f;
+        float haloScale = 5.0f;
+        float haloWidth = 1.0f;
+        float haloBlur = 0.5f;
+        float haloSaturation = 1.0f;
+
+        // Rainbow
+        bool enableRainbow = false;
+        bool rainbowSpikes = true;
+        float rainbowIntensity = 0.8f;
+        float rainbowFrequency = 1.0f;
+        double rainbowLength = 0.8f;
+    };
+}
+
+// Canvas for Preview and Interaction
+class AstroSpikeCanvas : public QWidget {
+    Q_OBJECT
+public:
+    explicit AstroSpikeCanvas(QWidget* parent = nullptr);
+    void setImage(const QImage& img);
+    void setStars(const QVector<AstroSpike::Star>& stars);
+    void setConfig(const AstroSpike::Config& config);
+    void setToolMode(AstroSpike::ToolMode mode);
+    
+    // Explicit size setters
+    void setStarInputRadius(float r) { m_brushRadius = r; update(); }
+    void setEraserInputSize(float s) { m_eraserSize = s; update(); }
+    
+    const QVector<AstroSpike::Star>& getStars() const { return m_stars; }
+
+    void zoomIn();
+    void zoomOut();
+    void zoomToPoint(QPointF widgetPos, float factor);
+    void fitToView();
+
+    void render(QPainter& p, float scale, const QPointF& offset);
+
+signals:
+    void starsUpdated(const QVector<AstroSpike::Star>& stars);
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+
+private:
+    void drawPreview(QPainter& p, float scale);
+    QColor getStarColor(const AstroSpike::Star& star, float hueShift, float sat, float alpha);
+    void createGlowSprite();
+    void handleTool(const QPointF& imgPos);
+
+    QImage m_image; // Display image (8-bit)
+    QVector<AstroSpike::Star> m_stars;
+    AstroSpike::Config m_config;
+    AstroSpike::ToolMode m_toolMode = AstroSpike::ToolMode::None;
+
+    float m_zoom = 1.0f;
+    QPointF m_panOffset;
+    QPoint m_lastMousePos;
+    bool m_dragging = false;
+    bool m_firstResize = true;
+
+    float m_brushRadius = 4.0f;
+    float m_eraserSize = 20.0f;
+    
+    QImage m_glowSprite; // Cached glow sprite
+    
+    // Cached preview of spikes at standardized resolution
+    QImage m_spikePreview;
+    void updateSpikePreview();
+};
+
+// Detection Thread — detects ALL stars at the lowest threshold using OpenCV
+class StarDetectionThread : public QThread {
+    Q_OBJECT
+public:
+    StarDetectionThread(const ImageBuffer& buffer, QObject* parent = nullptr);
+    void run() override;
+
+signals:
+    void detectionComplete(const QVector<AstroSpike::Star>& stars);
+
+private:
+    int m_width = 0;
+    int m_height = 0;
+    cv::Mat m_grayMat;  // 8-bit grayscale for thresholding
+    cv::Mat m_rgbMat;   // 8-bit BGR for color extraction
+};
+
+// Main Dialog
+class AstroSpikeDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit AstroSpikeDialog(QWidget* parent = nullptr);
+    ~AstroSpikeDialog();
+    
+    void setImageBuffer(ImageBuffer* buffer);
+
+signals:
+    void imageUpdated();
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    void timerEvent(QTimerEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
+private slots:
+    void runDetection();
+    void onStarsDetected(const QVector<AstroSpike::Star>& stars);
+    void onCanvasStarsUpdated(const QVector<AstroSpike::Star>& stars);
+    void filterStarsByThreshold();
+    
+    // Tools
+    void setToolMode(AstroSpike::ToolMode mode);
+    void onConfigChanged();
+    void resetConfig();
+    
+    // Actions
+public:
+    void applyToDocument();
+
+private:
+    void setupUI();
+    void setupControls(QVBoxLayout* layout);
+    QWidget* createSlider(const QString& label, float min, float max, float step, float initial, float* target, const QString& unit = "");
+
+    ImageBuffer* m_buffer; 
+    AstroSpike::Config m_config;
+    
+    AstroSpikeCanvas* m_canvas;
+    StarDetectionThread* m_thread = nullptr;
+    QBasicTimer m_detectTimer;
+    
+    // Pre-computed full star list (sorted by brightness descending)
+    QVector<AstroSpike::Star> m_allStars;
+    
+    // Controls
+    QScrollArea* m_controlsScroll;
+    QLabel* m_statusLabel;
+    
+    // History for Undo/Redo
+    QVector<QVector<AstroSpike::Star>> m_history;
+    int m_historyIndex = -1;
+    QPushButton* m_btnUndo;
+    QPushButton* m_btnRedo;
+    
+    void pushHistory(const QVector<AstroSpike::Star>& stars);
+    void undo();
+    void redo();
+    void updateHistoryButtons();
+};
+
+#endif // ASTROSPIKEDIALOG_H
