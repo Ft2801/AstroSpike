@@ -59,6 +59,9 @@ jobs:
       # ===========================
       - name: Install Dependencies via Homebrew
         run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+          
           echo ">>> Installing build tools..."
           brew install cmake ninja pkg-config
           brew link --overwrite cmake ninja pkg-config || true
@@ -341,6 +344,9 @@ jobs:
       # ===========================
       - name: Install Dependencies via Homebrew (Intel under Rosetta)
         run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_INSTALL_CLEANUP=1
+          
           # Check if x86_64 Homebrew is available at /usr/local
           if [ ! -f "/usr/local/bin/brew" ]; then
             echo ">>> Setting up x86_64 Homebrew at /usr/local..."
@@ -356,28 +362,28 @@ jobs:
           export PATH="/usr/local/bin:$PATH"
           
           echo ">>> Installing build tools (x86_64)..."
-          arch -x86_64 bash -c "brew install cmake ninja pkg-config"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake ninja pkg-config"
           
           echo ">>> Installing Qt6 for x86_64..."
-          arch -x86_64 bash -c "brew install qt@6"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install qt@6"
           arch -x86_64 bash -c "brew link --overwrite qt@6 || true"
           
           echo ">>> Installing Qt runtime dependencies (x86_64)..."
-          arch -x86_64 bash -c "brew install double-conversion brotli libb2 pcre2 harfbuzz freetype"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install double-conversion brotli libb2 pcre2 harfbuzz freetype"
           
           echo ">>> Installing image/scientific libraries (x86_64)..."
-          arch -x86_64 bash -c "brew install opencv --without-openvino 2>/dev/null || brew install opencv || true"
-          arch -x86_64 bash -c "brew install cfitsio || true"
-          arch -x86_64 bash -c "brew install openblas || true"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install opencv --without-openvino 2>/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install opencv || true"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cfitsio || true"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install openblas || true"
           
           echo ">>> Installing compression libraries (x86_64)..."
-          arch -x86_64 bash -c "brew install lz4 zstd"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install lz4 zstd"
           
           echo ">>> Installing OpenMP (x86_64)..."
-          arch -x86_64 bash -c "brew install libomp"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install libomp"
           
           echo ">>> Installing DMG creation tool (x86_64)..."
-          arch -x86_64 bash -c "brew install create-dmg"
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install create-dmg"
           
           echo ">>> All dependencies installed for x86_64!"
 
