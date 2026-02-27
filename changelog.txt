@@ -1,6 +1,10 @@
 AstroSpike Changelog
 ====================
 
+Version 1.1.0
+- Added MacOS build support
+- Improved algorithms from the latest TStar update
+
 Version 1.0.0
 - Initial Standalone Release
 - Ported AstroSpikeDialog from TStar

@@ -1,8 +1,6 @@
 #!/bin/bash
 # =============================================================================
 # AstroSpike Installer Builder for macOS
-# Equivalent of build_installer.bat + installer.iss for Windows
-# =============================================================================
 # Creates a DMG disk image with the app and Applications shortcut
 # =============================================================================
 
@@ -54,12 +52,9 @@ echo ""
 log_step 1 "Building application..."
 
 if [ ! -f "build/AstroSpike.app/Contents/MacOS/AstroSpike" ]; then
-    # Usually the workflow runs cmake build before this script
-    echo "[WARNING] Build output not found. Launching build..."
-    # Fallback build command if not already built
-    cmake --build build --config Release
+    ./src/build_macos.sh
 fi
-echo "  - Build check: OK (assuming build exists)"
+echo "  - Build: OK"
 
 # --- STEP 2: Create Distribution Package ---
 echo ""
@@ -105,12 +100,6 @@ if [ -n "$CREATE_DMG" ]; then
     # Use create-dmg for fancy DMG
     echo "  - Using create-dmg for styled DMG..."
     
-    # Check for background image (AstroSpike likely doesn't have one yet)
-    BG_IMAGE=""
-    if [ -f "src/images/dmg_background.png" ]; then
-        BG_IMAGE="--background src/images/dmg_background.png"
-    fi
-    
     # Check for volume icon
     VOL_ICON=""
     if [ -f "src/images/AstroSpike.icns" ]; then
@@ -126,7 +115,6 @@ if [ -n "$CREATE_DMG" ]; then
         --icon "AstroSpike.app" 150 185 \
         --icon "Applications" 450 185 \
         --hide-extension "AstroSpike.app" \
-        $BG_IMAGE \
         --app-drop-link 450 185 \
         "$DMG_PATH" \
         "$STAGING_DIR"

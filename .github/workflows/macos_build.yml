@@ -1,0 +1,520 @@
+# =============================================================================
+# AstroSpike macOS Build Workflow
+# =============================================================================
+# Automatically builds AstroSpike for macOS using GitHub's macOS runners.
+# This allows building macOS binaries from Windows by pushing to GitHub.
+#
+# How to use:
+#   1. Push this file to your GitHub repository
+#   2. Go to the "Actions" tab in your repository
+#   3. The build will start automatically
+#   4. Download the DMG from the "Artifacts" section when complete
+# =============================================================================
+
+name: macOS Build
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+jobs:
+  # ============================================================================
+  # Apple Silicon Build (ARM64) - Faster, Recommended
+  # ============================================================================
+  build-macos-arm64:
+    name: Build macOS App (Apple Silicon - ARM64)
+    runs-on: macos-14  # Apple Silicon runner (fastest)
+    
+    steps:
+      # ===========================
+      # 1. Checkout Repository
+      # ===========================
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version detection
+
+      # ===========================
+      # 2. Cache Homebrew packages
+      # ===========================
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        id: cache-brew
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/Cellar
+          key: ${{ runner.os }}-brew-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-brew-
+
+      # ===========================
+      # 3. Install System Dependencies (Homebrew)
+      # ===========================
+      - name: Install Dependencies via Homebrew
+        run: |
+          echo ">>> Installing build tools..."
+          brew install cmake ninja pkg-config
+          brew link --overwrite cmake ninja pkg-config || true
+          
+          echo ">>> Installing Qt6..."
+          brew install qt
+          brew link --overwrite qt || true
+          
+          echo ">>> Installing Qt runtime dependencies (fix for uic crash)..."
+          brew install double-conversion brotli libb2 pcre2 harfbuzz freetype
+          brew link --overwrite double-conversion || true
+          brew link --overwrite brotli || true
+          brew link --overwrite libb2 || true
+          brew link --overwrite pcre2 || true
+          brew link --overwrite harfbuzz || true
+          brew link --overwrite freetype || true
+          
+          echo ">>> Installing image/scientific libraries..."
+          brew install opencv --without-openvino 2>/dev/null || brew install opencv || true
+          brew link --overwrite opencv || true
+          brew install cfitsio
+          brew link --overwrite cfitsio || true
+          # OpenBLAS: required by libopencv_core at runtime
+          brew install openblas
+          brew link --overwrite openblas || true
+          
+          echo ">>> Installing compression libraries..."
+          brew install lz4
+          brew link --overwrite lz4 || true
+          brew install zstd
+          brew link --overwrite zstd || true
+          
+          echo ">>> Installing OpenMP..."
+          brew install libomp
+          brew link --overwrite libomp || true
+          
+          echo ">>> Installing DMG creation tool..."
+          brew install create-dmg
+          brew link --overwrite create-dmg || true
+          
+          echo ">>> All dependencies installed!"
+
+      # ===========================
+      # 4. Configure CMake
+      # ===========================
+      - name: Configure CMake
+        run: |
+          # Definitive Qt6 Detection for Homebrew (Deep Cellar Search)
+          echo ">>> Detecting Qt6 paths via Deep Cellar Search..."
+          
+          # Initialize variables
+          QT_PREFIXES=""
+          QT6_DIR_DETECTED=""
+          
+          # 0. Attempt to repair symlinks first
+          echo ">>> Attempting to repair Qt symlinks..."
+          brew link --overwrite qt 2>/dev/null || true
+          brew link --overwrite qtbase 2>/dev/null || true
+          
+          # 1. Primary discovery via qmake
+          PRIMARY_QT_PREFIX=$( (brew --prefix qt 2>/dev/null || brew --prefix qt@6 2>/dev/null) | tr -d '[:space:]' )
+          if [ -n "$PRIMARY_QT_PREFIX" ]; then
+             echo "ℹ️  Primary prefix: '$PRIMARY_QT_PREFIX'"
+             QMAKE_BIN=""
+             if [ -x "$PRIMARY_QT_PREFIX/bin/qmake6" ]; then QMAKE_BIN="$PRIMARY_QT_PREFIX/bin/qmake6";
+             elif [ -x "$PRIMARY_QT_PREFIX/bin/qmake" ]; then QMAKE_BIN="$PRIMARY_QT_PREFIX/bin/qmake"; fi
+             
+             if [ -n "$QMAKE_BIN" ]; then
+                 QT_INSTALL_LIBS=$("$QMAKE_BIN" -query QT_INSTALL_LIBS | tr -d '[:space:]')
+                 if [ -d "$QT_INSTALL_LIBS/cmake/Qt6" ]; then
+                     QT6_DIR_DETECTED="$QT_INSTALL_LIBS/cmake/Qt6"
+                     echo "✅ Verified Qt6 CMake dir via qmake: '$QT6_DIR_DETECTED'"
+                 fi
+             fi
+          fi
+          
+          # 2. Deep Cellar Search Fallback
+          if [ -z "$QT6_DIR_DETECTED" ]; then
+             echo ">>> Searching for Qt6Config.cmake in /opt/homebrew/Cellar..."
+             FOUND_CONFIG=$(find /opt/homebrew/Cellar -maxdepth 6 -name "Qt6Config.cmake" -print -quit 2>/dev/null)
+             
+             if [ -n "$FOUND_CONFIG" ]; then
+                  QT6_DIR_DETECTED=$(dirname "$FOUND_CONFIG")
+                  echo "✅ Found Qt6Config.cmake in Cellar at: '$QT6_DIR_DETECTED'"
+             else
+                  echo "⚠️  Cellar search failed. Trying generic brew list..."
+                  BREW_FILES=$(brew list qt 2>/dev/null | grep "Qt6Config.cmake" | head -n 1 | tr -d '[:space:]')
+                  if [ -n "$BREW_FILES" ]; then
+                      QT6_DIR_DETECTED=$(dirname "$BREW_FILES")
+                      echo "✅ Found via brew list: '$QT6_DIR_DETECTED'"
+                  fi
+             fi
+          fi
+          
+          # 3. Construct CMAKE_PREFIX_PATH
+          for pkg in qt qt@6 qtbase; do
+            PKG_PATH=$(brew --prefix $pkg 2>/dev/null | tr -d '[:space:]')
+            if [ -n "$PKG_PATH" ]; then
+              if [ -z "$QT_PREFIXES" ]; then QT_PREFIXES="$PKG_PATH"; else QT_PREFIXES="${QT_PREFIXES};${PKG_PATH}"; fi
+            fi
+          done
+          
+          export CMAKE_PREFIX_PATH="$QT_PREFIXES"
+          export Qt6_DIR="$QT6_DIR_DETECTED"
+          
+          echo ">>> Final CMAKE_PREFIX_PATH: $CMAKE_PREFIX_PATH"
+          echo ">>> Final Qt6_DIR: $Qt6_DIR"
+          
+          # 4. Dependency Harvester (Runtime & Link Time)
+          echo ">>> Harvesting physical dependency paths..."
+          FIXED_DYLD_PATH=""
+          FOUND_LIBOMP=""
+          
+          DEP_LIST="libomp libb2 double-conversion brotli pcre2 harfbuzz freetype"
+          
+          for dep in $DEP_LIST; do
+             FOUND_LIB_DIR=$(find /opt/homebrew/Cellar/$dep -maxdepth 3 -name "lib" -type d -print -quit 2>/dev/null)
+             
+             if [ -n "$FOUND_LIB_DIR" ]; then
+                echo "✅ Found $dep lib: $FOUND_LIB_DIR"
+                if [ -z "$FIXED_DYLD_PATH" ]; then FIXED_DYLD_PATH="$FOUND_LIB_DIR"; else FIXED_DYLD_PATH="$FIXED_DYLD_PATH:$FOUND_LIB_DIR"; fi
+                
+                if [ "$dep" == "libomp" ]; then
+                   FOUND_LIBOMP=$(dirname "$FOUND_LIB_DIR")
+                fi
+             else
+                echo "⚠️  Could not find physical lib for $dep"
+             fi
+          done
+          
+          FIXED_DYLD_PATH="$FIXED_DYLD_PATH:/usr/lib:/usr/local/lib"
+          
+          echo ">>> Setting DYLD_FALLBACK_LIBRARY_PATH=$FIXED_DYLD_PATH"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$FIXED_DYLD_PATH" >> $GITHUB_ENV
+          
+          # Define LIBOMP_PREFIX
+          LIBOMP_PREFIX="$FOUND_LIBOMP"
+          if [ -z "$LIBOMP_PREFIX" ]; then
+             echo "⚠️  Physical libomp not found, falling back to brew --prefix"
+             LIBOMP_PREFIX=$(brew --prefix libomp)
+          fi
+          echo ">>> Using LIBOMP_PREFIX: $LIBOMP_PREFIX"
+          
+          # Configure with CMake
+          CMAKE_EXTRA_ARGS=""
+          if [ -n "$Qt6_DIR" ]; then CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DQt6_DIR=$Qt6_DIR"; fi
+          
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            $CMAKE_EXTRA_ARGS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" \
+            -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
+            -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
+            -DOpenMP_C_LIB_NAMES="omp" \
+            -DOpenMP_CXX_LIB_NAMES="omp" \
+            -DOpenMP_omp_LIBRARY="${LIBOMP_PREFIX}/lib/libomp.dylib"
+
+      # ===========================
+      # 5. Build Application
+      # ===========================
+      - name: Build AstroSpike
+        run: |
+          cmake --build build --config Release --parallel $(sysctl -n hw.ncpu)
+
+      # ===========================
+      # 6. Verify Build
+      # ===========================
+      - name: Verify Build Output
+        run: |
+          if [ -d "build/AstroSpike.app" ]; then
+            echo "✅ AstroSpike.app bundle created successfully"
+            ls -la build/AstroSpike.app/Contents/MacOS/
+          elif [ -f "build/AstroSpike" ]; then
+            echo "✅ AstroSpike binary created (non-bundle)"
+          else
+            echo "❌ Build output not found!"
+            exit 1
+          fi
+
+      # ===========================
+      # 7. Package Distribution
+      # ===========================
+      - name: Package App Bundle
+        run: |
+          chmod +x src/package_macos.sh
+          chmod +x src/macos_utils.sh
+          ./src/package_macos.sh --silent
+
+      # ===========================
+      # 8. Create DMG Installer
+      # ===========================
+      - name: Create DMG Installer
+        run: |
+          chmod +x src/build_installer_macos.sh
+          chmod +x src/build_macos.sh
+          ./src/build_installer_macos.sh
+          # Rename DMG to include Apple Silicon identifier
+          if ls installer_output/AstroSpike_Setup_*.dmg 1> /dev/null 2>&1; then
+            VERSION=$(ls installer_output/AstroSpike_Setup_*.dmg | head -1 | sed 's/.*AstroSpike_Setup_//' | sed 's/.dmg//')
+            mv "installer_output/AstroSpike_Setup_${VERSION}.dmg" "installer_output/AstroSpike_Setup_${VERSION}-AppleSilicon-ARM64.dmg"
+          fi
+
+      # ===========================
+      # 9. Upload DMG Artifact
+      # ===========================
+      - name: Upload DMG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroSpike-macOS-Installer
+          path: installer_output/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      # ===========================
+      # 10. Upload App Bundle
+      # ===========================
+      - name: Upload App Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroSpike-macOS-App
+          path: dist/AstroSpike.app
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ===========================
+      # 11. Build Summary
+      # ===========================
+      - name: Build Summary
+        run: |
+          echo "## macOS Build Complete! 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          VERSION=$(grep -E "^Version [0-9.]+" changelog.txt | head -1 | awk '{print $2}')
+          echo "**Version:** $VERSION (Apple Silicon ARM64)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- **DMG Installer:** \`installer_output/AstroSpike_Setup_${VERSION}-AppleSilicon-ARM64.dmg\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Bundle:** \`dist/AstroSpike.app\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Notes" >> $GITHUB_STEP_SUMMARY
+          echo "- Built on macOS runner with Apple Silicon (ARM64)" >> $GITHUB_STEP_SUMMARY
+          echo "- Compatible with macOS 11.0 (Big Sur) and later" >> $GITHUB_STEP_SUMMARY
+          echo "- First launch: Right-click → Open to bypass Gatekeeper" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # Intel Mac Build (x86_64) - Native Intel Compilation
+  # ============================================================================
+  build-macos-intel:
+    name: Build macOS App (Intel x86_64)
+    runs-on: macos-15  # Intel runner
+    
+    steps:
+      # ===========================
+      # 1. Checkout Repository
+      # ===========================
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ===========================
+      # 2. Cache Homebrew packages
+      # ===========================
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        id: cache-brew
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar
+          key: ${{ runner.os }}-brew-intel-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-brew-intel-
+
+      # ===========================
+      # 3. Install System Dependencies (Homebrew for Intel under Rosetta)
+      # ===========================
+      - name: Install Dependencies via Homebrew (Intel under Rosetta)
+        run: |
+          # Check if x86_64 Homebrew is available at /usr/local
+          if [ ! -f "/usr/local/bin/brew" ]; then
+            echo ">>> Setting up x86_64 Homebrew at /usr/local..."
+            arch -x86_64 bash -c '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+          fi
+          
+          # Clean up any conflicting Python symlinks from system Python
+          echo ">>> Cleaning up conflicting system Python symlinks..."
+          rm -f /usr/local/bin/python3 /usr/local/bin/python3.* /usr/local/bin/pip3* /usr/local/bin/idle3* /usr/local/bin/pydoc3* /usr/local/bin/python3*-config /usr/local/bin/2to3* 2>/dev/null || true
+          
+          # Use x86_64 Homebrew explicitly
+          export HOMEBREW_PREFIX="/usr/local"
+          export PATH="/usr/local/bin:$PATH"
+          
+          echo ">>> Installing build tools (x86_64)..."
+          arch -x86_64 bash -c "brew install cmake ninja pkg-config"
+          
+          echo ">>> Installing Qt6 for x86_64..."
+          arch -x86_64 bash -c "brew install qt@6"
+          arch -x86_64 bash -c "brew link --overwrite qt@6 || true"
+          
+          echo ">>> Installing Qt runtime dependencies (x86_64)..."
+          arch -x86_64 bash -c "brew install double-conversion brotli libb2 pcre2 harfbuzz freetype"
+          
+          echo ">>> Installing image/scientific libraries (x86_64)..."
+          arch -x86_64 bash -c "brew install opencv --without-openvino 2>/dev/null || brew install opencv || true"
+          arch -x86_64 bash -c "brew install cfitsio || true"
+          arch -x86_64 bash -c "brew install openblas || true"
+          
+          echo ">>> Installing compression libraries (x86_64)..."
+          arch -x86_64 bash -c "brew install lz4 zstd"
+          
+          echo ">>> Installing OpenMP (x86_64)..."
+          arch -x86_64 bash -c "brew install libomp"
+          
+          echo ">>> Installing DMG creation tool (x86_64)..."
+          arch -x86_64 bash -c "brew install create-dmg"
+          
+          echo ">>> All dependencies installed for x86_64!"
+
+      # ===========================
+      # 4. Configure CMake (Intel)
+      # ===========================
+      - name: Configure CMake (Intel)
+        run: |
+          # Use x86_64 Homebrew at /usr/local
+          export HOMEBREW_PREFIX="/usr/local"
+          export PATH="/usr/local/bin:$PATH"
+          
+          HOMEBREW_PREFIX="/usr/local"
+          QT6_DIR="$HOMEBREW_PREFIX/opt/qt@6"
+          
+          echo "Homebrew prefix: $HOMEBREW_PREFIX"
+          echo "QT6_DIR: $QT6_DIR"
+          
+          # Verify Qt6 exists for x86_64
+          if [ ! -d "$QT6_DIR/lib/cmake/Qt6" ]; then
+            echo "❌ Qt6 not found at $QT6_DIR"
+            echo "Checking available Qt installations:"
+            ls -la /usr/local/opt/ | grep qt || echo "No Qt found in /usr/local/opt"
+            ls -la /opt/homebrew/opt/ | grep qt || echo "No Qt found in /opt/homebrew/opt"
+            exit 1
+          fi
+          
+          echo "✅ Qt6 found at: $QT6_DIR"
+          
+          # Get libomp path (from Intel Homebrew)
+          LIBOMP_PREFIX="$HOMEBREW_PREFIX/opt/libomp"
+          if [ ! -d "$LIBOMP_PREFIX" ]; then
+            LIBOMP_PREFIX=$(arch -x86_64 bash -c "brew --prefix libomp")
+          fi
+          
+          # Configure CMake for Intel x86_64
+          arch -x86_64 cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_PREFIX_PATH="$HOMEBREW_PREFIX/opt/qt@6" \
+            -DQt6_DIR="$QT6_DIR/lib/cmake/Qt6" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" \
+            -DOpenMP_C_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
+            -DOpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include" \
+            -DOpenMP_C_LIB_NAMES="omp" \
+            -DOpenMP_CXX_LIB_NAMES="omp" \
+            -DOpenMP_omp_LIBRARY="${LIBOMP_PREFIX}/lib/libomp.dylib"
+
+      # ===========================
+      # 5. Build Application
+      # ===========================
+      - name: Build AstroSpike (Intel x86_64)
+        run: |
+          export HOMEBREW_PREFIX="/usr/local"
+          export PATH="/usr/local/bin:$PATH"
+          arch -x86_64 bash -c 'cmake --build build --config Release --parallel $(sysctl -n hw.ncpu)'
+
+      # ===========================
+      # 6. Verify Build
+      # ===========================
+      - name: Verify Build Output
+        run: |
+          if [ -d "build/AstroSpike.app" ]; then
+            echo "✅ AstroSpike.app bundle created successfully"
+            file build/AstroSpike.app/Contents/MacOS/AstroSpike
+            ls -la build/AstroSpike.app/Contents/MacOS/
+          elif [ -f "build/AstroSpike" ]; then
+            echo "✅ AstroSpike binary created (non-bundle)"
+          else
+            echo "❌ Build output not found!"
+            exit 1
+          fi
+
+      # ===========================
+      # 7. Package Distribution
+      # ===========================
+      - name: Package App Bundle (Intel)
+        run: |
+          chmod +x src/package_macos.sh
+          chmod +x src/macos_utils.sh
+          ./src/package_macos.sh --silent
+
+      # ===========================
+      # 8. Create DMG Installer
+      # ===========================
+      - name: Create DMG Installer (Intel)
+        run: |
+          chmod +x src/build_installer_macos.sh
+          chmod +x src/build_macos.sh
+          ./src/build_installer_macos.sh
+          # Rename DMG to include Intel x86_64 identifier
+          if ls installer_output/AstroSpike_Setup_*.dmg 1> /dev/null 2>&1; then
+            VERSION=$(ls installer_output/AstroSpike_Setup_*.dmg | head -1 | sed 's/.*AstroSpike_Setup_//' | sed 's/.dmg//')
+            mv "installer_output/AstroSpike_Setup_${VERSION}.dmg" "installer_output/AstroSpike_Setup_${VERSION}-Intel-x86_64.dmg"
+          fi
+
+      # ===========================
+      # 9. Upload DMG Artifact
+      # ===========================
+      - name: Upload DMG Artifact (Intel)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroSpike-macOS-Installer-Intel-x86_64
+          path: installer_output/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
+      # ===========================
+      # 10. Upload App Bundle
+      # ===========================
+      - name: Upload App Bundle (Intel)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstroSpike-macOS-App-Intel-x86_64
+          path: dist/AstroSpike.app
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ===========================
+      # 11. Build Summary
+      # ===========================
+      - name: Build Summary (Intel)
+        run: |
+          echo "## macOS Intel Build Complete! 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          VERSION=$(grep -E "^Version [0-9.]+" changelog.txt | head -1 | awk '{print $2}')
+          echo "**Version:** $VERSION (Intel x86_64)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- **DMG Installer:** \`installer_output/AstroSpike_Setup_${VERSION}-Intel-x86_64.dmg\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Bundle:** \`dist/AstroSpike.app\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Notes" >> $GITHUB_STEP_SUMMARY
+          echo "- Built on Intel macOS runner (macos-15)" >> $GITHUB_STEP_SUMMARY
+          echo "- Native Intel x86_64 build" >> $GITHUB_STEP_SUMMARY
+          echo "- Compatible with Intel Mac systems on macOS 11.0+" >> $GITHUB_STEP_SUMMARY
