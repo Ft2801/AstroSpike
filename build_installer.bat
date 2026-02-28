@@ -10,7 +10,8 @@ REM Move to project root
 pushd "%~dp0"
 set PROJECT_ROOT=%CD%
 
-set "VERSION=1.0.0"
+REM --- Read version from changelog.txt ---
+call :GetVersion
 echo [INFO] Building version: %VERSION%
 echo.
 
@@ -85,3 +86,13 @@ for /f "tokens=2*" %%A in ('reg query "HKLM\Software\Microsoft\Windows\CurrentVe
     )
 )
 exit /b 0
+
+:GetVersion
+set "VERSION=1.0.0"
+if exist "changelog.txt" (
+    for /f "tokens=2" %%v in ('type "changelog.txt" ^| findstr /R "^Version [0-9]"') do (
+        set "VERSION=%%v"
+        goto :EOF
+    )
+)
+goto :EOF
