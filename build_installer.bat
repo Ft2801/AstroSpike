@@ -27,12 +27,12 @@ if "!ISCC!"=="" (
 )
 echo   - Inno Setup 6: OK at !ISCC!
 
-if not exist "installer.iss" (
-    echo [ERROR] installer.iss not found!
+if not exist "src\installer.iss" (
+    echo [ERROR] src\installer.iss not found!
     pause
     exit /b 1
 )
-echo   - installer.iss: OK
+echo   - src\installer.iss: OK
 echo.
 
 REM --- STEP 1: Clean Previous Installer Output ---
@@ -54,7 +54,7 @@ echo.
 
 REM --- STEP 3: Create Installer ---
 echo [STEP 3] Creating installer with Inno Setup...
-"!ISCC!" /DMyAppVersion="%VERSION%" installer.iss
+"!ISCC!" /DMyAppVersion="%VERSION%" src\installer.iss
 if !ERRORLEVEL! neq 0 (
     echo [ERROR] Installer creation failed!
     pause
