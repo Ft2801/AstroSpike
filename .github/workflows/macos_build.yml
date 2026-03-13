@@ -87,6 +87,9 @@ jobs:
           # OpenBLAS: required by libopencv_core at runtime
           brew install openblas
           brew link --overwrite openblas || true
+          # GSL: GNU Scientific Library (required for scientific/FFT operations)
+          brew install gsl
+          brew link --overwrite gsl || true
           
           echo ">>> Installing compression libraries..."
           brew install lz4
@@ -375,6 +378,8 @@ jobs:
           arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install opencv --without-openvino 2>/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 brew install opencv || true"
           arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cfitsio || true"
           arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install openblas || true"
+          # GSL: GNU Scientific Library (required for scientific/FFT operations)
+          arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install gsl || true"
           
           echo ">>> Installing compression libraries (x86_64)..."
           arch -x86_64 bash -c "HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install lz4 zstd"

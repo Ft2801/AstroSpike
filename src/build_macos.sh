@@ -67,7 +67,7 @@ fi
 echo "  - Qt6: OK ($QT_PREFIX)"
 
 # Check other dependencies
-DEPS=("opencv" "cfitsio" "libomp")
+DEPS=("opencv" "cfitsio" "libomp" "gsl")
 for dep in "${DEPS[@]}"; do
     DEP_PREFIX=$(brew --prefix "$dep" 2>/dev/null || echo "")
     if [ -z "$DEP_PREFIX" ] || [ ! -d "$DEP_PREFIX" ]; then
