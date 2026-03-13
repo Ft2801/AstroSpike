@@ -144,6 +144,9 @@ copy_dylib "libwebpdemux" "libwebp" "$FRAMEWORKS_DIR" "$BUILD_ARCH" || true
 copy_dylib "libfreetype" "freetype" "$FRAMEWORKS_DIR" "$BUILD_ARCH" || true
 copy_dylib "libharfbuzz" "harfbuzz" "$FRAMEWORKS_DIR" "$BUILD_ARCH" || true
 
+copy_dylib "libgsl" "gsl" "$FRAMEWORKS_DIR" "$BUILD_ARCH" || true
+copy_dylib "libgslcblas" "gsl" "$FRAMEWORKS_DIR" "$BUILD_ARCH" || true
+
 copy_dylib "liblapack" "lapack" "$FRAMEWORKS_DIR" "$BUILD_ARCH" || true
 
 # Transitive dependencies that macdeployqt often misses
@@ -354,13 +357,92 @@ for imglib in libpng libjpeg libtiff libwebp; do
     fi
 done
 
-# --- Ad-hoc Code Signing ---
+# --- Runtime Dependency Verification ---
 echo ""
-log_step 8 "Applying ad-hoc code signing..."
+echo "[STEP 7.3] Runtime dependency verification..."
+
+# Check Accelerate.framework compatibility
+check_accelerate_framework || true
+
+# Verify the executable's dynamic library load paths using otool
+echo "  - Checking executable load commands (otool -L)..."
+if [ -f "$EXECUTABLE" ]; then
+    LOAD_ISSUES=$(otool -L "$EXECUTABLE" 2>/dev/null | grep -v "^$EXECUTABLE:" | awk '{print $1}' | \
+        grep -vE "^(@rpath|@executable_path|@loader_path|/usr/lib|/System/)" || true)
+    if [ -n "$LOAD_ISSUES" ]; then
+        echo "  [WARNING] Executable still has unresolved absolute paths:"
+        echo "$LOAD_ISSUES" | while IFS= read -r dep; do
+            echo "    - $dep"
+        done
+    else
+        echo "  - Executable load paths: OK (no stray absolute paths)"
+    fi
+fi
+
+# Verify Qt SVG plugin is present (needed for SVG icon rendering at runtime)
+echo "  - Checking Qt SVG plugin..."
+PLUGINS_DIR="$DIST_DIR/Contents/PlugIns"
+SVG_PLUGIN=$(find "$PLUGINS_DIR" -name "*qsvg*" -o -name "*QtSvg*" 2>/dev/null | head -1 || true)
+if [ -n "$SVG_PLUGIN" ]; then
+    echo "  - Qt SVG plugin: OK ($SVG_PLUGIN)"
+else
+    echo "  [INFO] Qt SVG plugin not found (not required if app does not use SVG icons)"
+fi
+
+# Check that all dylib IDs are set to @rpath and not absolute paths
+echo "  - Verifying dylib IDs are portable (@rpath-based)..."
+BROKEN_IDS=0
+for dylib in "$FRAMEWORKS_DIR"/*.dylib; do
+    if [ -f "$dylib" ]; then
+        DYLIB_ID=$(otool -D "$dylib" 2>/dev/null | tail -1 | tr -d ' ')
+        if echo "$DYLIB_ID" | grep -qvE "^(@rpath|@executable_path|@loader_path|/usr/lib|/System/)"; then
+            if echo "$DYLIB_ID" | grep -q "^/"; then
+                echo "  [WARNING] Non-portable dylib ID in $(basename "$dylib"): $DYLIB_ID"
+                BROKEN_IDS=$((BROKEN_IDS + 1))
+            fi
+        fi
+    fi
+done
+if [ $BROKEN_IDS -eq 0 ]; then
+    echo "  - All dylib IDs are portable: OK"
+fi
+
+# --- Ad-hoc Code Signing (inside-out strategy) ---
+echo ""
+log_step 8 "Applying ad-hoc code signing (inside-out)..."
 
 check_command codesign && {
-    codesign --force --deep -s - "$DIST_DIR"
-    echo "  - Ad-hoc signed: OK"
+    # Step 1: Sign individual dylibs inside Frameworks/
+    echo "  - Signing bundled dylibs..."
+    find "$DIST_DIR/Contents/Frameworks" -name "*.dylib" 2>/dev/null | while read -r lib; do
+        codesign --force --sign - "$lib" 2>/dev/null || true
+    done
+
+    # Step 2: Sign .framework bundles (inner binaries first, then the bundle itself)
+    echo "  - Signing Qt frameworks..."
+    find "$DIST_DIR/Contents/Frameworks" -name "*.framework" -type d 2>/dev/null | while read -r fw; do
+        fw_name=$(basename "$fw" .framework)
+        fw_binary="$fw/Versions/A/$fw_name"
+        if [ -f "$fw_binary" ]; then
+            codesign --force --sign - "$fw_binary" 2>/dev/null || true
+        fi
+        codesign --force --sign - "$fw" 2>/dev/null || true
+    done
+
+    # Step 3: Sign plugins
+    echo "  - Signing plugins..."
+    find "$DIST_DIR/Contents/PlugIns" -name "*.dylib" 2>/dev/null | while read -r plugin; do
+        codesign --force --sign - "$plugin" 2>/dev/null || true
+    done
+
+    # Step 4: Sign the main executable
+    echo "  - Signing main executable..."
+    codesign --force --sign - "$DIST_DIR/Contents/MacOS/AstroSpike" 2>/dev/null || true
+
+    # Step 5: Sign the app bundle as a whole
+    echo "  - Signing app bundle..."
+    codesign --force --sign - "$DIST_DIR"
+    echo "  - Ad-hoc signed (inside-out): OK"
 } || {
     log_warning "codesign not found (skip)"
 }

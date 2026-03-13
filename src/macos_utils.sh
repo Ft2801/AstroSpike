@@ -438,6 +438,31 @@ rewrite_homebrew_paths() {
     fi
 }
 
+# --- Accelerate.framework Compatibility Check ---
+# Detects the NEWLAPACK bug present on macOS < 13.3 where Accelerate.framework
+# ships an incomplete LAPACK implementation that causes crashes in numerical libs.
+check_accelerate_framework() {
+    local macos_version
+    macos_version=$(sw_vers -productVersion 2>/dev/null || echo "0.0.0")
+    local major minor patch
+    IFS='.' read -r major minor patch <<< "$macos_version"
+    minor=${minor:-0}
+    patch=${patch:-0}
+
+    echo "  - macOS version: $macos_version"
+
+    # macOS < 13.3 has the Accelerate NEWLAPACK bug
+    if [ "$major" -lt 13 ] || { [ "$major" -eq 13 ] && [ "$minor" -lt 3 ]; }; then
+        echo "  [WARNING] macOS $macos_version detected: Accelerate.framework NEWLAPACK bug may be present."
+        echo "    Libraries linked against Accelerate LAPACK (e.g. OpenBLAS) may crash."
+        echo "    Workaround: ensure OpenBLAS is used instead of Accelerate for LAPACK routines."
+        return 1
+    else
+        echo "  - Accelerate.framework: OK (macOS >= 13.3, NEWLAPACK bug not present)"
+        return 0
+    fi
+}
+
 # --- Logging Utilities ---
 log_info() {
     echo "[INFO] $1"
